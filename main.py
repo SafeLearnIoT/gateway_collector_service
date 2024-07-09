@@ -1,92 +1,49 @@
-import pandas as pd
 import aiomqtt
 import asyncio
 import os
-import sqlalchemy
+import ast
+import pymongo
 from datetime import datetime
-from io import StringIO
 from dotenv import load_dotenv
 
+DEVICES = ["esp8266/inside", "esp8266/outside", "esp32/light", "esp32/window"]
+
 load_dotenv()
+
+mongo_client = pymongo.MongoClient(
+    f'mongodb://{os.environ.get("MONGO_USER")}:{os.environ.get("MONGO_PASS")}@{os.environ.get("MONGO_HOST")}:{os.environ.get("MONGO_PORT")}/'
+)
+mongo_db = mongo_client[os.environ.get("MONGO_DB")]
+mongo_data_col = mongo_db[os.environ.get("MONGO_DATA_COL")]
+mongo_status_col = mongo_db[os.environ.get("MONGO_STATUS_COL")]
+mongo_ml_col = mongo_db[os.environ.get("MONGO_ML_COL")]
 
 aiomqtt.Client(
     hostname=os.environ.get("MQTT_HOST"), port=int(os.environ.get("MQTT_PORT"))
 )
 
-engine = sqlalchemy.create_engine(
-    f"mysql+mysqlconnector://{os.environ.get('MYSQL_USER')}:{os.environ.get('MYSQL_PASS')}@{os.environ.get('MYSQL_HOST')}:{os.environ.get('MYSQL_PORT')}/{os.environ.get('MYSQL_DB')}"
-)
 
-
-async def commit_activity(message, device):
-    with engine.connect() as conn:
-        data = message.split(";")
-        conn.execute(
-            sqlalchemy.text(
-                f"INSERT INTO activity (timestamp, device, action, runtime) VALUE ('{datetime.now()}', '{device}', '{data[0]}', {data[1]})"
-            )
-        )
-        conn.commit()
-
-
+# datetime.fromtimestamp(x)
 async def main():
     async with aiomqtt.Client("192.168.0.164") as client:
 
-        await client.subscribe("esp8266/inside/data")
-        await client.subscribe("esp8266/outside/data")
-        await client.subscribe("esp32/light/data")
-        await client.subscribe("esp32/window/data")
-
-        await client.subscribe("esp8266/inside/status")
-        await client.subscribe("esp8266/outside/status")
-        await client.subscribe("esp32/light/status")
-        await client.subscribe("esp32/window/status")
+        for device in DEVICES:
+            await client.subscribe(f"data/{device}")
+            await client.subscribe(f"ml/{device}")
+            await client.subscribe(f"status/{device}")
 
         async for message in client.messages:
-            if message.topic.matches("esp32/light/data"):
-                df = pd.read_csv(StringIO(message.payload.decode()))
-                df["timestamp"] = df["timestamp"].apply(
-                    lambda x: datetime.fromtimestamp(x)
-                )
-                df.to_sql(
-                    "ambient_light_data", con=engine, index=False, if_exists="append"
-                )
-            if message.topic.matches("esp32/window/data"):
-                df = pd.read_csv(StringIO(message.payload.decode()))
-                df["timestamp"] = df["timestamp"].apply(
-                    lambda x: datetime.fromtimestamp(x)
-                )
-                df.to_sql(
-                    "window_status_data", con=engine, index=False, if_exists="append"
-                )
-            if message.topic.matches("esp8266/outside/data"):
-                df = pd.read_csv(StringIO(message.payload.decode()))
-                df["timestamp"] = df["timestamp"].apply(
-                    lambda x: datetime.fromtimestamp(x)
-                )
-                df.to_sql(
-                    "outside_env_data", con=engine, index=False, if_exists="append"
-                )
-            if message.topic.matches("esp8266/inside/data"):
-                df = pd.read_csv(StringIO(message.payload.decode()))
-                df["timestamp"] = df["timestamp"].apply(
-                    lambda x: datetime.fromtimestamp(x)
-                )
-                df.to_sql(
-                    "inside_env_data", con=engine, index=False, if_exists="append"
-                )
+            data = ast.literal_eval(message.payload.decode())
+            data["time"] = datetime.fromtimestamp(data["time"])
 
-            if message.topic.matches("esp8266/inside/status"):
-                await commit_activity(message.payload.decode(), "esp8266/inside")
+            if message.topic.matches("data/#"):
+                mongo_data_col.insert_one(data)
 
-            if message.topic.matches("esp8266/outside/status"):
-                await commit_activity(message.payload.decode(), "esp8266/outside")
+            if message.topic.matches("ml/#"):
+                mongo_ml_col.insert_one(data)
 
-            if message.topic.matches("esp32/light/status"):
-                await commit_activity(message.payload.decode(), "esp32/light")
-
-            if message.topic.matches("esp32/window/status"):
-                await commit_activity(message.payload.decode(), "esp32/window")
+            if message.topic.matches("status/#"):
+                mongo_status_col.insert_one(data)
 
 
 asyncio.run(main())
