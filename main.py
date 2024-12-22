@@ -2,29 +2,47 @@ import aiomqtt
 import asyncio
 import os
 import ast
-import pymongo
+import pymysql
 from datetime import datetime
+import json
 from dotenv import load_dotenv
 
 DEVICES = ["esp8266/inside", "esp8266/outside", "esp32/light", "esp32/window"]
 
 load_dotenv()
 
-mongo_client = pymongo.MongoClient(
-    f'mongodb://{os.environ.get("MONGO_USER")}:{os.environ.get("MONGO_PASS")}@{os.environ.get("MONGO_HOST")}:{os.environ.get("MONGO_PORT")}/'
-)
-mongo_db = mongo_client[os.environ.get("MONGO_DB")]
-mongo_data_col = mongo_db[os.environ.get("MONGO_DATA_COL")]
-mongo_status_col = mongo_db[os.environ.get("MONGO_STATUS_COL")]
-mongo_ml_col = mongo_db[os.environ.get("MONGO_ML_COL")]
-
 aiomqtt.Client(
     hostname=os.environ.get("MQTT_HOST"), port=int(os.environ.get("MQTT_PORT"))
 )
 
+# DATA
+data_query = """
+insert into safelearniot.data (device, data, time_sent, time_saved)
+values (%s, %s, %s, %s);
+"""
+# ML
+ml_query = """
+insert into ml (device, data, time_sent, time_saved)
+values (%s, %s, %s, %s);
+"""
 
-# datetime.fromtimestamp(x)
+# STATUS
+status_query = """
+insert into safelearniot.status (active_time, device, status, time_sent, time_saved)
+values (%s, %s, %s, %s, %s);
+"""
+
+
 async def main():
+    connection = pymysql.connect(
+        host=os.environ["MYSQL_HOST"],
+        user=os.environ["MYSQL_USER"],
+        password=os.environ["MYSQL_PASS"],
+        database=os.environ["MYSQL_DB"],
+        port=int(os.environ["MYSQL_PORT"])
+    )   
+    cursor = connection.cursor()
+    
     async with aiomqtt.Client("192.168.0.164") as client:
 
         for device in DEVICES:
@@ -34,16 +52,24 @@ async def main():
 
         async for message in client.messages:
             data = ast.literal_eval(message.payload.decode())
-            data["time"] = datetime.fromtimestamp(data["time"])
+            data["time_sent"] = datetime.fromtimestamp(data["time_sent"])
+            data["time_saved"] = datetime.now()
 
             if message.topic.matches("data/#"):
-                mongo_data_col.insert_one(data)
+                values = (data['device'], json.dumps(data['data']), data['time_sent'], data['time_saved'])
+                cursor.execute(data_query, values)
+                connection.commit()
+                
 
             if message.topic.matches("ml/#"):
-                mongo_ml_col.insert_one(data)
+                values = (data['device'], json.dumps(data['data']), data['time_sent'], data['time_saved'])
+                cursor.execute(ml_query, values)
+                connection.commit()
 
             if message.topic.matches("status/#"):
-                mongo_status_col.insert_one(data)
+                values = (data['active_time'], data['device'], data['status'], data['time_sent'], data['time_saved'])
+                cursor.execute(status_query, values)
+                connection.commit()
 
 
 asyncio.run(main())
