@@ -33,17 +33,27 @@ values (%s, %s, %s, %s, %s);
 """
 
 
+async def send_weights(client: aiomqtt.Client):
+    while True:
+        for device in DEVICES:
+            await client.publish(f"cmd/{device}", "weights", retain=True)
+            print(f"Published 'weights' on cmd/{device}")
+
+        await asyncio.sleep(4 * 60 * 60)
+
+
 async def main():
     connection = pymysql.connect(
         host=os.environ["MYSQL_HOST"],
         user=os.environ["MYSQL_USER"],
         password=os.environ["MYSQL_PASS"],
         database=os.environ["MYSQL_DB"],
-        port=int(os.environ["MYSQL_PORT"])
-    )   
+        port=int(os.environ["MYSQL_PORT"]),
+    )
     cursor = connection.cursor()
-    
+
     async with aiomqtt.Client("192.168.0.164") as client:
+        asyncio.create_task(send_weights(client))
 
         for device in DEVICES:
             await client.subscribe(f"data/{device}")
@@ -56,18 +66,33 @@ async def main():
             data["time_saved"] = datetime.now()
 
             if message.topic.matches("data/#"):
-                values = (data['device'], json.dumps(data['data']), data['time_sent'], data['time_saved'])
+                values = (
+                    data["device"],
+                    json.dumps(data["data"]),
+                    data["time_sent"],
+                    data["time_saved"],
+                )
                 cursor.execute(data_query, values)
                 connection.commit()
-                
 
             if message.topic.matches("ml/#"):
-                values = (data['device'], json.dumps(data['data']), data['time_sent'], data['time_saved'])
+                values = (
+                    data["device"],
+                    json.dumps(data["data"]),
+                    data["time_sent"],
+                    data["time_saved"],
+                )
                 cursor.execute(ml_query, values)
                 connection.commit()
 
             if message.topic.matches("status/#"):
-                values = (data['active_time'], data['device'], data['status'], data['time_sent'], data['time_saved'])
+                values = (
+                    data["active_time"],
+                    data["device"],
+                    data["status"],
+                    data["time_sent"],
+                    data["time_saved"],
+                )
                 cursor.execute(status_query, values)
                 connection.commit()
 
