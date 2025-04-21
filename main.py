@@ -1,3 +1,4 @@
+import random
 import aiomqtt
 import asyncio
 import os
@@ -22,24 +23,31 @@ values (%s, %s, %s, %s);
 """
 # ML
 ml_query = """
-insert into ml (device, data, time_sent, time_saved)
+insert into safelearniot.ml (device, data, time_sent, time_saved)
 values (%s, %s, %s, %s);
+"""
+
+# PARAMS
+def params_query(device):
+    return f"""
+select * from safelearniot.ml where device = '{device}' and JSON_VALUE(data, '$.type') = 'params' order by time_saved desc limit 1;
 """
 
 # STATUS
 status_query = """
-insert into safelearniot.status (active_time, device, status, time_sent, time_saved)
-values (%s, %s, %s, %s, %s);
+insert into safelearniot.status (active_time, device, status, time_sent, time_saved, test_name)
+values (%s, %s, %s, %s, %s, %s);
 """
 
 
 async def send_weights(client: aiomqtt.Client):
-    while True:
-        for device in DEVICES:
-            await client.publish(f"cmd/{device}", "weights", retain=True)
-            print(f"Published 'weights' on cmd/{device}")
-
-        await asyncio.sleep(4 * 60 * 60)
+    pass
+    # while True:
+    #     for device in DEVICES:
+    #         await client.subscribe(f"cmd_mcu/{device}")
+    #         await client.publish(f"cmd_gateway/{device}", "get_params", retain=True)
+    #         print(f"Published 'get_params' on cmd_gateway/{device}")
+    #     await asyncio.sleep(4 * 60 * 60)
 
 
 async def main():
@@ -59,13 +67,43 @@ async def main():
             await client.subscribe(f"data/{device}")
             await client.subscribe(f"ml/{device}")
             await client.subscribe(f"status/{device}")
+            await client.subscribe(f"cmd_mcu/{device}")
 
         async for message in client.messages:
-            data = ast.literal_eval(message.payload.decode())
-            data["time_sent"] = datetime.fromtimestamp(data["time_sent"])
-            data["time_saved"] = datetime.now()
+            if message.topic.matches("cmd_mcu/#"):
+                msg = message.payload.decode()
+                if msg != "":
+                    if msg != "get_params":
+                        data = ast.literal_eval(message.payload.decode()[7:])
+
+                        data["time_sent"] = datetime.fromtimestamp(data["time_sent"])
+                        data["time_saved"] = datetime.now()
+                        values = (
+                            data["device"],
+                            json.dumps(data["data"]),
+                            data["time_sent"],
+                            data["time_saved"],
+                        )
+                        cursor.execute(ml_query, values)
+                        connection.commit()
+                        await asyncio.sleep(1)
+                        await client.publish(message.topic.value.replace('cmd_mcu', 'cmd_gateway'), f"set_params;{json.dumps(data['data'])}".encode(), retain=True)
+                        await client.publish(message.topic.value, "", retain=True)
+                        print(f"Published resp 'set_params' on {message.topic.value.replace('cmd_mcu', 'cmd_gateway')}")
+                    else:
+                        cursor.execute(params_query(message.topic.value[8:]))
+                        result = cursor.fetchone()
+                        data_str = f"set_params;{result[2]}"
+                        #print(data_str)
+                        await client.publish(message.topic.value.replace('cmd_mcu', 'cmd_gateway'), data_str.encode(), retain=True)
+                        await client.publish(message.topic.value, "", retain=True)
+                        print(f"Published 'set_params' on {message.topic.value.replace('cmd_mcu', 'cmd_gateway')}")
+                
 
             if message.topic.matches("data/#"):
+                data = ast.literal_eval(message.payload.decode())
+                data["time_sent"] = datetime.fromtimestamp(data["time_sent"])
+                data["time_saved"] = datetime.now()
                 values = (
                     data["device"],
                     json.dumps(data["data"]),
@@ -76,6 +114,9 @@ async def main():
                 connection.commit()
 
             if message.topic.matches("ml/#"):
+                data = ast.literal_eval(message.payload.decode())
+                data["time_sent"] = datetime.fromtimestamp(data["time_sent"])
+                data["time_saved"] = datetime.now()
                 values = (
                     data["device"],
                     json.dumps(data["data"]),
@@ -86,15 +127,21 @@ async def main():
                 connection.commit()
 
             if message.topic.matches("status/#"):
+                data = ast.literal_eval(message.payload.decode())
+                data["time_sent"] = datetime.fromtimestamp(data["time_sent"])
+                data["time_saved"] = datetime.now()
                 values = (
                     data["active_time"],
                     data["device"],
                     data["status"],
                     data["time_sent"],
                     data["time_saved"],
+                    data["test_name"]
                 )
+                print(values)
                 cursor.execute(status_query, values)
                 connection.commit()
+            
 
 
 asyncio.run(main())
