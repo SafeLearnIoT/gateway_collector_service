@@ -12,10 +12,6 @@ DEVICES = ["esp8266/inside", "esp8266/outside", "esp32/light", "esp32/window"]
 
 load_dotenv()
 
-aiomqtt.Client(
-    hostname=os.environ.get("MQTT_HOST"), port=int(os.environ.get("MQTT_PORT"))
-)
-
 # DATA
 data_query = """
 insert into safelearniot.data (device, data, time_sent, time_saved)
@@ -60,7 +56,7 @@ async def main():
     )
     cursor = connection.cursor()
 
-    async with aiomqtt.Client("192.168.0.164") as client:
+    async with aiomqtt.Client(hostname=os.environ.get("MQTT_HOST"), port=int(os.environ.get("MQTT_PORT"))) as client:
         asyncio.create_task(send_weights(client))
 
         for device in DEVICES:
