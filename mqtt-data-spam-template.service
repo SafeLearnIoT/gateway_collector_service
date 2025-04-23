@@ -1,5 +1,5 @@
 [Unit]
-Description=Collects data from MQTT and sends it to database
+Description=Spams data from MQTT and sends it to database
 
 [Service]
 User=root
